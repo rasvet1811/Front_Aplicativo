@@ -6,6 +6,7 @@ import DocUsuario from './Desarrollo/documen/InfoCarpetas/docUsuario.jsx';
 import Cases from './Desarrollo/Cases/Cases.jsx';
 import Profile from './Desarrollo/Profile/Perfil.jsx';
 import DocumentForm from './Desarrollo/components/Forms/DocumentForm.jsx';
+import Permisos from './Desarrollo/Permisos/Permisos.jsx';
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
         <Route path="/documents/form" element={<DocumentForm />} />
         <Route path="/cases" element={<Cases />} />
         <Route path="/profile" element={<Profile />} />
+        <Route path="/permisos" element={<Permisos />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>

@@ -1,8 +1,70 @@
+import { useState, useEffect } from "react";
 import "./index.css";
 import Nav from "../components/Nav/Nav.jsx";
 import user from "../../Imagenes/Perfil/user.png";
+import { authService, usuariosAPI } from "../../services/api.js";
 
 export default function Profile() {
+  const [userData, setUserData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadUserData();
+  }, []);
+
+  const loadUserData = async () => {
+    try {
+      // Obtener usuario del localStorage primero
+      const localUser = authService.getUser();
+      
+      if (localUser && localUser.id) {
+        // Cargar datos completos del usuario desde la API
+        try {
+          const fullUserData = await usuariosAPI.getById(localUser.id);
+          setUserData(fullUserData);
+        } catch (error) {
+          console.warn('[Profile] Error al cargar datos completos, usando datos locales:', error);
+          // Si falla, usar datos locales
+          setUserData(localUser);
+        }
+      } else {
+        // Si no hay usuario en localStorage, intentar verificar token
+        const tokenData = await authService.verifyToken();
+        if (tokenData && tokenData.user) {
+          setUserData(tokenData.user);
+        }
+      }
+    } catch (error) {
+      console.error('[Profile] Error al cargar datos del usuario:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'No especificada';
+    try {
+      const date = new Date(dateString);
+      const options = { year: 'numeric', month: 'long', day: 'numeric' };
+      return date.toLocaleDateString('es-ES', options);
+    } catch (error) {
+      return dateString;
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="profile-container">
+        <Nav showNotification={true} />
+        <main className="profile-content">
+          <div style={{ textAlign: 'center', padding: '2rem' }}>
+            <p>Cargando información del perfil...</p>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="profile-container">
       <Nav showNotification={true} />
@@ -12,13 +74,17 @@ export default function Profile() {
             <img src={user} alt="User" />
           </div>
           <div className="profile-basic-info">
-            <p className="profile-name">Sara Corrales Jaramillo</p>
-            <p className="profile-title">Aprendiz Tecnología</p>
+            <p className="profile-name">
+              {userData?.nombre || 'Usuario'}
+            </p>
+            <p className="profile-title">
+              {userData?.puesto || userData?.rol_tipo || 'Sin puesto asignado'}
+            </p>
           </div>
           <div className="profile-division">
             <div className="division-label">División</div>
             <div className="division-value">
-              <p>ARTMODE</p>
+              <p>{userData?.division || 'Sin división asignada'}</p>
             </div>
           </div>
         </aside>
@@ -33,50 +99,45 @@ export default function Profile() {
             <div className="details-cell">
               <div className="details-label">My role</div>
               <div className="details-value">
-                <p>Analista de Soluciones</p>
-                <p>Dirección de Tecnología y Transformación Digital</p>
+                <p>{userData?.puesto || 'Sin puesto asignado'}</p>
+                <p>{userData?.rol_tipo || userData?.rol?.tipo || 'Sin rol'}</p>
               </div>
             </div>
             <div className="details-cell">
               <div className="details-label">City</div>
               <div className="details-value">
-                <p>Medellín</p>
+                <p>{userData?.ciudad || 'Sin ciudad asignada'}</p>
                 <p>Colombia</p>
               </div>
             </div>
             <div className="details-cell">
               <div className="details-label">Experience</div>
               <div className="details-value">
-                <p>2 años</p>
-                <p>Desarrollo de software y análisis de sistemas</p>
+                <p>{userData?.experiencia || 'Sin experiencia registrada'}</p>
               </div>
             </div>
             <div className="details-cell">
               <div className="details-label">Correo</div>
               <div className="details-value">
-                <p>sara.corrales@maaji.co</p>
-                <p>sara.corrales.jaramillo@gmail.com</p>
+                <p>{userData?.correo || 'Sin correo asignado'}</p>
               </div>
             </div>
             <div className="details-cell">
               <div className="details-label">Fecha de ingreso</div>
               <div className="details-value">
-                <p>19 de mayo del 2025</p>
-                <p>Contrato indefinido</p>
+                <p>{formatDate(userData?.fecha_ingreso)}</p>
               </div>
             </div>
             <div className="details-cell">
               <div className="details-label">Area</div>
               <div className="details-value">
-                <p>Dirección de Talento, Cultura & Tecnología</p>
-                <p>Sub-área: Soluciones & Arquitectura</p>
+                <p>{userData?.area || 'Sin área asignada'}</p>
               </div>
             </div>
             <div className="details-cell">
               <div className="details-label">División</div>
               <div className="details-value">
-                <p>ARTMODE</p>
-                <p>Supervisor: Gloria Patricia Gonzalez</p>
+                <p>{userData?.division || 'Sin división asignada'}</p>
               </div>
             </div>
             <div className="details-cell empty"></div>

@@ -253,6 +253,11 @@
   color: #d97706;
 }
 
+.status-blue {
+  background-color: #dbeafe;
+  color: #2563eb;
+}
+
 /* Modal */
 .modal-overlay {
   position: fixed;
@@ -542,6 +547,16 @@
 
   .modal-form {
     padding: 1rem;
+  }
+}
+
+/* Animación para el botón de refresco */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 

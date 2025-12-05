@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import "./index.css";
 import Nav from "../components/Nav/Nav.jsx";
-import { casosAPI, empleadosAPI } from "../../services/api.js";
+import { casosAPI, empleadosAPI, usuariosAPI } from "../../services/api.js";
 
 export default function Cases() {
   const [selectedDate, setSelectedDate] = useState("");
@@ -15,6 +15,13 @@ export default function Cases() {
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [empleados, setEmpleados] = useState([]);
+  const [usuarios, setUsuarios] = useState([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [showChangeStatusModal, setShowChangeStatusModal] = useState(false);
+  const [statusChangeData, setStatusChangeData] = useState({
+    nuevoEstado: '',
+    motivo: ''
+  });
 
   // Estados para el formulario
   const [formData, setFormData] = useState({
@@ -22,24 +29,113 @@ export default function Cases() {
     personName: '',
     createdAt: '',
     endDate: '',
-    requestInfo: ''
+    requestInfo: '',
+    responsable: ''
   });
 
   const createdAtRef = useRef(null);
   const endDateRef = useRef(null);
 
-  // Cargar casos y empleados al montar el componente
+  // Cargar casos, empleados y usuarios al montar el componente
   useEffect(() => {
-    loadCases();
-    loadEmpleados();
+    console.log('[Cases] Componente montado, cargando datos iniciales...');
+    const loadInitialData = async () => {
+      try {
+        await Promise.all([
+          loadCases(),
+          loadEmpleados(),
+          loadUsuarios()
+        ]);
+        console.log('[Cases] Datos iniciales cargados correctamente');
+      } catch (error) {
+        console.error('[Cases] Error al cargar datos iniciales:', error);
+      }
+    };
+    loadInitialData();
   }, []);
 
-  const loadCases = async () => {
+  // Actualizar datos automáticamente cada 30 segundos
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      console.log('[Cases] Actualización automática de datos...');
+      loadCases(true); // Mostrar indicador de actualización
+      loadEmpleados();
+      loadUsuarios();
+    }, 30000); // 30 segundos
+
+    // Limpiar el intervalo cuando el componente se desmonte
+    return () => clearInterval(intervalId);
+  }, []);
+
+  // Función para refrescar manualmente
+  const handleRefresh = async () => {
+    console.log('[Cases] Refrescando datos manualmente...');
+    setRefreshing(true);
     try {
-      setLoading(true);
+      await Promise.all([
+        loadCases(true),
+        loadEmpleados(),
+        loadUsuarios()
+      ]);
+    } catch (error) {
+      console.error('[Cases] Error al refrescar:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Refrescar datos cuando la ventana vuelve a tener foco
+  useEffect(() => {
+    const handleFocus = () => {
+      console.log('[Cases] Ventana recuperó el foco, refrescando datos...');
+      loadCases();
+      loadEmpleados();
+      loadUsuarios();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, []);
+
+  // Refrescar datos cuando se abre el modal
+  useEffect(() => {
+    if (showModal) {
+      console.log('[Cases] Modal abierto, refrescando usuarios y empleados...');
+      loadEmpleados();
+      loadUsuarios();
+    }
+  }, [showModal]);
+
+  const loadCases = async (showRefreshing = false) => {
+    try {
+      if (showRefreshing) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
       const data = await casosAPI.getAll();
+      console.log('[Cases] Casos recibidos (raw):', data);
+      
+      // Asegurar que siempre sea un array
+      let casosArray = [];
+      if (Array.isArray(data)) {
+        casosArray = data;
+      } else if (data && typeof data === 'object') {
+        // Intentar extraer el array de diferentes formatos
+        if (Array.isArray(data.results)) {
+          casosArray = data.results;
+        } else if (Array.isArray(data.data)) {
+          casosArray = data.data;
+        } else {
+          // Si es un objeto único, convertirlo a array
+          casosArray = [data];
+        }
+      }
+      
+      console.log('[Cases] Casos procesados (array):', casosArray);
+      
       // Mapear datos del backend al formato del frontend
-      const mappedCases = data.map(caso => ({
+      const mappedCases = casosArray.map(caso => ({
         id: caso.id || caso.Id_Caso,
         caseType: caso.diagnostico || caso.Diagnostico || 'Sin título',
         entityName: caso.empleado_nombre || caso.empleado?.nombre || 'Sin empleado',
@@ -49,7 +145,8 @@ export default function Cases() {
         requestInfo: caso.observaciones || caso.Observaciones || caso.diagnostico || caso.Diagnostico || '',
         empleadoId: caso.empleado || caso.Id_Empleado,
         tipoFuero: caso.tipo_fuero || caso.Tipo_Fuero,
-        responsable: caso.responsable || caso.Responsable
+        responsable: caso.responsable || caso.Responsable,
+        responsableNombre: caso.responsable_nombre || caso.responsable?.nombre || 'Sin responsable asignado'
       }));
       setCases(mappedCases);
     } catch (error) {
@@ -57,33 +154,215 @@ export default function Cases() {
       // Mantener casos por defecto si hay error
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
   const loadEmpleados = async () => {
     try {
+      console.log('[Cases] Iniciando carga de empleados...');
       const data = await empleadosAPI.getAll();
-      setEmpleados(data);
+      console.log('[Cases] Empleados recibidos (raw):', data);
+      console.log('[Cases] Tipo de datos:', typeof data, 'Es array?', Array.isArray(data));
+      
+      // Asegurar que siempre sea un array
+      let empleadosArray = [];
+      if (Array.isArray(data)) {
+        empleadosArray = data;
+        console.log('[Cases] Los datos ya son un array');
+      } else if (data && typeof data === 'object') {
+        console.log('[Cases] Los datos son un objeto, buscando array dentro...');
+        console.log('[Cases] Keys del objeto:', Object.keys(data));
+        // Intentar extraer el array de diferentes formatos
+        if (Array.isArray(data.results)) {
+          empleadosArray = data.results;
+          console.log('[Cases] Array encontrado en data.results');
+        } else if (Array.isArray(data.data)) {
+          empleadosArray = data.data;
+          console.log('[Cases] Array encontrado en data.data');
+        } else if (Array.isArray(data.empleados)) {
+          empleadosArray = data.empleados;
+          console.log('[Cases] Array encontrado en data.empleados');
+        } else {
+          // Buscar cualquier propiedad que sea un array
+          for (const key in data) {
+            if (Array.isArray(data[key])) {
+              empleadosArray = data[key];
+              console.log('[Cases] Array encontrado en propiedad:', key);
+              break;
+            }
+          }
+          // Si no se encontró ningún array, intentar convertir el objeto a array
+          if (empleadosArray.length === 0 && data !== null) {
+            console.warn('[Cases] No se encontró array, el objeto completo:', data);
+          }
+        }
+      } else if (data === null || data === undefined) {
+        console.warn('[Cases] Los datos son null o undefined');
+        empleadosArray = [];
+      }
+      
+      console.log('[Cases] Empleados procesados (array):', empleadosArray);
+      console.log('[Cases] Cantidad de empleados:', empleadosArray.length);
+      
+      if (empleadosArray.length === 0) {
+        console.warn('[Cases] ⚠️ No se encontraron empleados. Verifica la conexión con el servidor.');
+      }
+      
+      setEmpleados(empleadosArray);
     } catch (error) {
-      console.error('Error al cargar empleados:', error);
+      console.error('[Cases] ❌ Error al cargar empleados:', error);
+      console.error('[Cases] Detalles del error:', error.message);
+      if (error.stack) {
+        console.error('[Cases] Stack trace:', error.stack);
+      }
+      setEmpleados([]); // Asegurar que siempre sea un array vacío en caso de error
+    }
+  };
+
+  const loadUsuarios = async () => {
+    try {
+      console.log('[Cases] Iniciando carga de usuarios...');
+      const data = await usuariosAPI.getAll();
+      console.log('[Cases] Respuesta completa de la API:', data);
+      console.log('[Cases] Tipo de datos:', typeof data, 'Es array?', Array.isArray(data));
+      
+      if (!data) {
+        console.error('[Cases] No se recibieron datos de la API');
+        setUsuarios([]);
+        return;
+      }
+      
+      // Manejar diferentes formatos de respuesta
+      let usuariosArray = [];
+      if (Array.isArray(data)) {
+        usuariosArray = data;
+      } else if (data.results && Array.isArray(data.results)) {
+        usuariosArray = data.results;
+      } else if (data.data && Array.isArray(data.data)) {
+        usuariosArray = data.data;
+      } else {
+        console.error('[Cases] Formato de datos no reconocido:', data);
+        setUsuarios([]);
+        return;
+      }
+      
+      console.log('[Cases] Total de usuarios recibidos:', usuariosArray.length);
+      console.log('[Cases] Primer usuario (ejemplo):', usuariosArray[0]);
+      
+      // Filtrar usuarios que sean solo THA o Usuario
+      const usuariosFiltrados = usuariosArray.filter(user => {
+        if (!user) {
+          console.warn('[Cases] Usuario nulo o indefinido encontrado');
+          return false;
+        }
+        
+        // Obtener el tipo de rol de diferentes formas posibles
+        let rolTipo = '';
+        
+        // Prioridad 1: rol_tipo (viene del serializer)
+        if (user.rol_tipo) {
+          rolTipo = String(user.rol_tipo);
+        }
+        // Prioridad 2: rol como objeto con tipo
+        else if (user.rol) {
+          if (typeof user.rol === 'object' && user.rol.tipo) {
+            rolTipo = String(user.rol.tipo);
+          } else if (typeof user.rol === 'string' || typeof user.rol === 'number') {
+            rolTipo = String(user.rol);
+          }
+        }
+        
+        // Normalizar el rol
+        const rolTipoNormalizado = rolTipo.toLowerCase().trim();
+        const nombreUsuario = user.nombre || user.username || 'Sin nombre';
+        const userId = user.id || user.Id_Usuario;
+        
+        // Log detallado para debugging
+        console.log('[Cases] Analizando usuario:', {
+          id: userId,
+          nombre: nombreUsuario,
+          rolTipoOriginal: rolTipo,
+          rolTipoNormalizado: rolTipoNormalizado,
+          tieneRolTipo: !!user.rol_tipo,
+          tieneRol: !!user.rol,
+          rolCompleto: user.rol,
+          userKeys: Object.keys(user)
+        });
+        
+        // Verificar si el rol es THA o Usuario
+        // Comparar de forma flexible pero precisa
+        const esTHA = rolTipoNormalizado === 'tha' || 
+                     rolTipoNormalizado.includes('tha');
+        const esUsuario = rolTipoNormalizado === 'usuario' || 
+                         rolTipoNormalizado.includes('usuario');
+        
+        const cumpleFiltro = esTHA || esUsuario;
+        
+        if (cumpleFiltro) {
+          console.log('[Cases] ✓ Usuario ACEPTADO:', nombreUsuario, 'Rol:', rolTipoNormalizado);
+        } else {
+          console.log('[Cases] ✗ Usuario RECHAZADO:', nombreUsuario, 'Rol:', rolTipoNormalizado);
+        }
+        
+        return cumpleFiltro;
+      });
+      
+      console.log('[Cases] ========================================');
+      console.log('[Cases] Usuarios filtrados (THA/Usuario):', usuariosFiltrados);
+      console.log('[Cases] Cantidad de usuarios filtrados:', usuariosFiltrados.length);
+      console.log('[Cases] ========================================');
+      
+      // Asegurar que cada usuario tenga un ID válido
+      const usuariosConId = usuariosFiltrados.filter(user => {
+        const userId = user.id || user.Id_Usuario;
+        if (!userId) {
+          console.warn('[Cases] ⚠️ Usuario sin ID válido:', user);
+          return false;
+        }
+        return true;
+      });
+      
+      console.log('[Cases] Usuarios con ID válido:', usuariosConId.length);
+      setUsuarios(usuariosConId);
+      
+      if (usuariosConId.length === 0) {
+        console.warn('[Cases] ⚠️ No se encontraron usuarios con rol THA o Usuario');
+        console.warn('[Cases] Todos los usuarios recibidos:', usuariosArray.map(u => ({
+          nombre: u.nombre || u.username,
+          rol: u.rol_tipo || u.rol?.tipo || u.rol
+        })));
+      }
+    } catch (error) {
+      console.error('[Cases] ❌ Error al cargar usuarios:', error);
+      console.error('[Cases] Error completo:', error.message);
+      if (error.stack) {
+        console.error('[Cases] Stack trace:', error.stack);
+      }
+      setUsuarios([]);
     }
   };
 
   const mapStatusToFrontend = (backendStatus) => {
+    // El backend ahora usa estados en minúsculas: 'pendiente', 'abierto', 'cerrado'
     const statusMap = {
-      'abierto': 'Pendiente',
+      'abierto': 'Abierto',
       'cerrado': 'Terminado',
       'pendiente': 'Pendiente',
-      'Abierto': 'Pendiente',
+      // Compatibilidad con valores antiguos (por si acaso)
+      'Abierto': 'Abierto',
       'Cerrado': 'Terminado',
       'Pendiente': 'Pendiente',
     };
-    return statusMap[backendStatus] || backendStatus || 'Pendiente';
+    const statusNormalizado = (backendStatus || '').toLowerCase();
+    return statusMap[statusNormalizado] || statusMap[backendStatus] || 'Abierto';
   };
 
   const mapStatusToBackend = (frontendStatus) => {
+    // Mapear estados del frontend a los estados del backend (en minúsculas)
     const statusMap = {
-      'Pendiente': 'abierto',
+      'Pendiente': 'pendiente',
+      'Abierto': 'abierto',
       'Terminado': 'cerrado',
       'In progrest': 'pendiente',
     };
@@ -176,6 +455,8 @@ export default function Cases() {
 
   const handleStatusFilterClick = () => {
     if (statusFilter === "") {
+      setStatusFilter("Abierto");
+    } else if (statusFilter === "Abierto") {
       setStatusFilter("Pendiente");
     } else if (statusFilter === "Pendiente") {
       setStatusFilter("Terminado");
@@ -201,8 +482,13 @@ export default function Cases() {
       personName: '',
       createdAt: today,
       endDate: '',
-      requestInfo: ''
+      requestInfo: '',
+      responsable: ''
     });
+    // Refrescar datos cuando se abre el modal para tener la información más actualizada
+    console.log('[Cases] Abriendo modal, refrescando datos...');
+    loadEmpleados();
+    loadUsuarios();
     setShowModal(true);
   };
 
@@ -213,7 +499,8 @@ export default function Cases() {
       personName: '',
       createdAt: '',
       endDate: '',
-      requestInfo: ''
+      requestInfo: '',
+      responsable: ''
     });
   };
 
@@ -237,44 +524,149 @@ export default function Cases() {
 
   const handleSubmitCase = async (e) => {
     e.preventDefault();
-    if (!formData.title || !formData.personName || !formData.createdAt || !formData.requestInfo) {
+    if (!formData.title || !formData.personName || !formData.createdAt || !formData.requestInfo || !formData.responsable) {
       alert('Por favor, complete todos los campos requeridos');
       return;
     }
 
     try {
-      // Buscar el empleado por nombre
-      const empleado = empleados.find(emp => 
-        `${emp.nombre || emp.Nombre} ${emp.apellido || emp.Apellido}` === formData.personName ||
-        emp.nombre === formData.personName ||
-        emp.Nombre === formData.personName
-      );
-
-      if (!empleado) {
-        alert('Empleado no encontrado. Por favor, verifique el nombre.');
+      // Validar que empleados sea un array
+      if (!Array.isArray(empleados)) {
+        console.error('[Cases] Error: empleados no es un array:', empleados);
+        console.error('[Cases] Tipo de empleados:', typeof empleados);
+        alert('Error: No se pudieron cargar los empleados. Por favor, recarga la página o intenta nuevamente.');
         return;
       }
 
-      const empleadoId = empleado.id || empleado.Id_Empleado;
+      if (empleados.length === 0) {
+        console.warn('[Cases] Advertencia: No hay empleados cargados. Intentando recargar...');
+        // Intentar recargar empleados una vez más
+        await loadEmpleados();
+        
+        // Si después de recargar sigue vacío, mostrar error
+        if (empleados.length === 0) {
+          alert('Error: No hay empleados disponibles en la base de datos. Por favor, verifica que haya empleados registrados o contacta al administrador.');
+          return;
+        }
+      }
+
+      // Buscar el empleado por nombre
+      const empleado = empleados.find(emp => {
+        if (!emp) return false;
+        const nombreCompleto = `${emp.nombre || emp.Nombre || ''} ${emp.apellido || emp.Apellido || ''}`.trim();
+        const nombreSolo = emp.nombre || emp.Nombre || '';
+        const nombreBuscado = formData.personName.trim();
+        return nombreCompleto.toLowerCase() === nombreBuscado.toLowerCase() || 
+               nombreSolo.toLowerCase() === nombreBuscado.toLowerCase();
+      });
+
+      if (!empleado) {
+        console.error('[Cases] Empleado no encontrado. Nombre buscado:', formData.personName);
+        console.error('[Cases] Empleados disponibles:', empleados.map(e => ({
+          nombre: e?.nombre || e?.Nombre,
+          apellido: e?.apellido || e?.Apellido,
+          id: e?.id || e?.Id_Empleado
+        })));
+        alert(`Empleado "${formData.personName}" no encontrado. Por favor, verifique el nombre o seleccione uno de la lista si está disponible.`);
+        return;
+      }
+
+      // Obtener el ID del empleado - según el serializer del backend, viene como 'id'
+      const empleadoId = empleado.id || empleado.Id_Empleado || empleado.id_empleado;
+      
+      if (!empleadoId) {
+        console.error('[Cases] Empleado encontrado pero sin ID válido:', empleado);
+        alert('Error: El empleado seleccionado no tiene un ID válido.');
+        return;
+      }
+
+      console.log('[Cases] Empleado encontrado:', {
+        nombre: empleado.nombre || empleado.Nombre,
+        apellido: empleado.apellido || empleado.Apellido,
+        id: empleadoId,
+        empleadoCompleto: empleado
+      });
+
+      // Validar que se haya seleccionado un responsable
+      if (!formData.responsable) {
+        alert('Por favor, seleccione un responsable para el caso.');
+        return;
+      }
+
+      const responsableId = parseInt(formData.responsable);
+      
+      if (isNaN(responsableId)) {
+        console.error('[Cases] Responsable ID inválido:', formData.responsable);
+        alert('Error: El responsable seleccionado no es válido.');
+        return;
+      }
+
+      console.log('[Cases] Creando caso con:', {
+        empleadoId: empleadoId,
+        responsableId: responsableId,
+        empleadoIdTipo: typeof empleadoId,
+        responsableIdTipo: typeof responsableId
+      });
+
+      // Asegurar que el empleadoId sea un número
+      const empleadoIdNum = parseInt(empleadoId);
+      if (isNaN(empleadoIdNum)) {
+        console.error('[Cases] Error: empleadoId no es un número válido:', empleadoId);
+        alert('Error: El ID del empleado no es válido.');
+        return;
+      }
 
       const casoData = {
-        empleado: empleadoId,
-        tipo_fuero: formData.title,
-        diagnostico: formData.requestInfo,
-        fecha_inicio: formData.createdAt,
-        estado: 'abierto',
-        observaciones: formData.requestInfo,
-        responsable: localStorage.getItem('user') ? JSON.parse(localStorage.getItem('user')).username : 'Usuario'
+        empleado: empleadoIdNum, // Asegurar que sea un número entero (requerido)
+        tipo_fuero: formData.title || null, // Opcional
+        diagnostico: formData.requestInfo || null, // Opcional
+        estado: 'abierto', // Estado en minúsculas según el modelo del backend (opcional, default: "abierto")
+        observaciones: formData.requestInfo || null, // Opcional
+        responsable: responsableId // ID del usuario responsable (opcional, si no se envía se asigna automáticamente)
+        // fecha_inicio NO se envía porque es read-only y se genera automáticamente
       };
 
+      console.log('[Cases] Datos del caso a crear:', casoData);
       const response = await casosAPI.create(casoData);
+      console.log('[Cases] Respuesta del servidor:', response);
       
-      // Recargar casos desde el backend
-      await loadCases();
+      // Recargar todos los datos desde el backend
+      console.log('[Cases] Caso creado exitosamente, refrescando datos...');
+      await Promise.all([
+        loadCases(),
+        loadEmpleados(),
+        loadUsuarios()
+      ]);
+      
+      alert('Caso creado exitosamente');
+      
+      // Disparar evento personalizado para actualizar notificaciones
+      window.dispatchEvent(new CustomEvent('caso-creado', { 
+        detail: { casoId: response.id || response.Id_Caso } 
+      }));
+      
       handleCloseModal();
     } catch (error) {
-      console.error('Error al crear caso:', error);
-      alert('Error al crear el caso. Por favor, intenta nuevamente.');
+      console.error('[Cases] Error al crear caso:', error);
+      console.error('[Cases] Detalles del error:', error.message);
+      
+      // Mostrar mensaje de error más específico
+      let errorMessage = 'Error al crear el caso. Por favor, intenta nuevamente.';
+      if (error.message) {
+        if (error.message.includes('empleado')) {
+          errorMessage = 'Error: El empleado seleccionado no es válido.';
+        } else if (error.message.includes('responsable')) {
+          errorMessage = 'Error: El responsable seleccionado no es válido.';
+        } else if (error.message.includes('400')) {
+          errorMessage = 'Error: Datos inválidos. Verifica que todos los campos estén correctos.';
+        } else if (error.message.includes('401')) {
+          errorMessage = 'Error: Tu sesión ha expirado. Por favor, inicia sesión nuevamente.';
+        } else {
+          errorMessage = `Error: ${error.message}`;
+        }
+      }
+      
+      alert(errorMessage);
     }
   };
 
@@ -286,28 +678,145 @@ export default function Cases() {
     setSelectedCase(null);
   };
 
-  const handleMarkAsFinished = async () => {
-    if (selectedCase) {
-      try {
-        const today = new Date().toISOString().split('T')[0];
-        const casoId = selectedCase.id;
-        
-        // Usar el endpoint de cerrar caso
-        await casosAPI.cerrar(casoId);
-        
-        // O actualizar manualmente
-        // await casosAPI.update(casoId, {
-        //   estado: 'cerrado',
-        //   fecha_cierre: today
-        // });
+  const handleOpenChangeStatusModal = () => {
+    // Prevenir abrir el modal si el caso está terminado
+    if (selectedCase && selectedCase.status === 'Terminado') {
+      alert('No se puede cambiar el estado de un caso terminado.');
+      return;
+    }
+    setStatusChangeData({
+      nuevoEstado: '',
+      motivo: ''
+    });
+    setShowChangeStatusModal(true);
+  };
 
-        // Recargar casos desde el backend
-        await loadCases();
-        setSelectedCase(null);
-      } catch (error) {
-        console.error('Error al cerrar caso:', error);
-        alert('Error al cerrar el caso. Por favor, intenta nuevamente.');
+  const handleCloseChangeStatusModal = () => {
+    setShowChangeStatusModal(false);
+    setStatusChangeData({
+      nuevoEstado: '',
+      motivo: ''
+    });
+  };
+
+  const handleChangeStatus = async () => {
+    if (!selectedCase) return;
+
+    // Prevenir cambios si el caso está terminado
+    if (selectedCase.status === 'Terminado') {
+      alert('No se puede cambiar el estado de un caso terminado.');
+      handleCloseChangeStatusModal();
+      return;
+    }
+
+    const { nuevoEstado, motivo } = statusChangeData;
+
+    if (!nuevoEstado) {
+      alert('Por favor, seleccione un nuevo estado.');
+      return;
+    }
+
+    // Mapear el estado del frontend al backend (minúsculas)
+    const estadoMap = {
+      'Pendiente': 'pendiente',
+      'Abierto': 'abierto',
+      'Terminado': 'cerrado'
+    };
+    const estadoBackend = estadoMap[nuevoEstado] || 'abierto';
+
+    // Si el nuevo estado es "pendiente" o "cerrado", el motivo es requerido
+    if ((estadoBackend === 'pendiente' || estadoBackend === 'cerrado') && !motivo.trim()) {
+      alert('Por favor, ingrese el motivo del cambio de estado.');
+      return;
+    }
+
+    try {
+      const casoId = selectedCase.id;
+      
+      // Preparar los datos para actualizar
+      const updateData = {
+        estado: estadoBackend
+      };
+
+      // Si hay motivo, agregarlo a las observaciones
+      let nuevasObservaciones = null;
+      if (motivo.trim()) {
+        // Obtener las observaciones actuales del caso desde el backend
+        let observacionesActuales = '';
+        try {
+          const casoActual = await casosAPI.getById(casoId);
+          observacionesActuales = casoActual.observaciones || selectedCase.requestInfo || '';
+        } catch (error) {
+          console.warn('[Cases] No se pudieron obtener las observaciones actuales, usando las del estado local:', error);
+          observacionesActuales = selectedCase.requestInfo || '';
+        }
+        
+        const fechaCambio = new Date().toLocaleDateString('es-ES', { 
+          year: 'numeric', 
+          month: '2-digit', 
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        const nuevaObservacion = `[Cambio de estado a ${nuevoEstado} - ${fechaCambio}]: ${motivo}`;
+        nuevasObservaciones = observacionesActuales 
+          ? `${observacionesActuales}\n\n${nuevaObservacion}`
+          : nuevaObservacion;
+        updateData.observaciones = nuevasObservaciones;
       }
+
+      console.log('[Cases] Cambiando estado del caso:', {
+        casoId,
+        nuevoEstadoFrontend: nuevoEstado,
+        nuevoEstadoBackend: estadoBackend,
+        updateData
+      });
+
+      // Según la documentación, PUT/PATCH solo requiere los campos que se quieren actualizar
+      // Si el estado es "cerrado", el backend actualiza automáticamente la fecha_cierre
+      // Usar PATCH para actualizaciones parciales (más apropiado que PUT)
+      const datosActualizacion = {
+        estado: estadoBackend
+      };
+
+      // Si hay motivo, agregar las observaciones
+      if (nuevasObservaciones) {
+        datosActualizacion.observaciones = nuevasObservaciones;
+      }
+
+      // Usar PATCH para actualización parcial (más apropiado que PUT)
+      await casosAPI.patch(casoId, datosActualizacion);
+
+      console.log('[Cases] Estado cambiado exitosamente, refrescando datos...');
+      // Recargar todos los datos desde el backend
+      await Promise.all([
+        loadCases(),
+        loadEmpleados(),
+        loadUsuarios()
+      ]);
+
+      alert(`Estado del caso cambiado a "${nuevoEstado}" exitosamente`);
+      
+      // Disparar evento personalizado para actualizar notificaciones
+      if (estadoBackend === 'cerrado') {
+        window.dispatchEvent(new CustomEvent('caso-cerrado', { 
+          detail: { casoId: casoId } 
+        }));
+      } else {
+        window.dispatchEvent(new CustomEvent('caso-actualizado', { 
+          detail: { casoId: casoId, nuevoEstado: estadoBackend } 
+        }));
+      }
+      
+      handleCloseChangeStatusModal();
+      setSelectedCase(null);
+    } catch (error) {
+      console.error('[Cases] Error al cambiar estado del caso:', error);
+      let errorMessage = 'Error al cambiar el estado del caso. Por favor, intenta nuevamente.';
+      if (error.message) {
+        errorMessage = `Error: ${error.message}`;
+      }
+      alert(errorMessage);
     }
   };
 
@@ -410,7 +919,43 @@ export default function Cases() {
 
         {/* Right Main Content */}
         <section className="cases-content">
-          <h2 className="cases-title">Cases</h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            <h2 className="cases-title">Cases</h2>
+            <button 
+              onClick={handleRefresh}
+              disabled={refreshing}
+              style={{
+                padding: '8px 16px',
+                backgroundColor: refreshing ? '#ccc' : '#9333EA',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: refreshing ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                fontSize: '14px'
+              }}
+              title="Refrescar datos"
+            >
+              <svg 
+                width="16" 
+                height="16" 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                style={{ 
+                  animation: refreshing ? 'spin 1s linear infinite' : 'none',
+                  transform: refreshing ? 'rotate(360deg)' : 'none'
+                }}
+              >
+                <path 
+                  d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" 
+                  fill="currentColor"
+                />
+              </svg>
+              {refreshing ? 'Actualizando...' : 'Actualizar'}
+            </button>
+          </div>
           
           <div className="cases-list">
             {filteredCases.length === 0 ? (
@@ -435,6 +980,21 @@ export default function Cases() {
                 <div className="cases-info">
                   <p className="cases-type">{caseItem.caseType}</p>
                   <p className="cases-entity">{caseItem.entityName}</p>
+                  {caseItem.responsableNombre && (
+                    <p className="cases-responsable" style={{ 
+                      fontSize: '0.875rem', 
+                      color: '#666', 
+                      marginTop: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 12C14.21 12 16 10.21 16 8C16 5.79 14.21 4 12 4C9.79 4 8 5.79 8 8C8 10.21 9.79 12 12 12ZM12 14C9.33 14 4 15.34 4 18V20H20V18C20 15.34 14.67 14 12 14Z" fill="#16a34a"/>
+                      </svg>
+                      {caseItem.responsableNombre}
+                    </p>
+                  )}
                   <div className="cases-dates">
                     <p className="cases-date">Creado: {formatDate(caseItem.createdAt)}</p>
                     {caseItem.endDate && (
@@ -445,7 +1005,8 @@ export default function Cases() {
                 <span className={`cases-status ${
                   caseItem.status === 'Pendiente' ? 'status-yellow' : 
                   caseItem.status === 'Terminado' ? 'status-green' : 
-                  caseItem.status === 'In progrest' ? 'status-red' : 'status-green'
+                  caseItem.status === 'Abierto' ? 'status-blue' :
+                  caseItem.status === 'In progrest' ? 'status-red' : 'status-blue'
                 }`}>
                   {caseItem.status}
                 </span>
@@ -492,10 +1053,15 @@ export default function Cases() {
                 <span className={`cases-status ${
                   selectedCase.status === 'Pendiente' ? 'status-yellow' : 
                   selectedCase.status === 'Terminado' ? 'status-green' : 
-                  selectedCase.status === 'In progrest' ? 'status-red' : 'status-green'
+                  selectedCase.status === 'Abierto' ? 'status-blue' :
+                  selectedCase.status === 'In progrest' ? 'status-red' : 'status-blue'
                 }`}>
                   {selectedCase.status}
                 </span>
+              </div>
+              <div className="case-detail-item">
+                <label>Responsable:</label>
+                <p>{selectedCase.responsableNombre || 'Sin responsable asignado'}</p>
               </div>
               <div className="case-detail-item full-width">
                 <label>Información de que se solicita en el caso:</label>
@@ -503,13 +1069,92 @@ export default function Cases() {
                   <p>{selectedCase.requestInfo || 'No hay información adicional disponible.'}</p>
                 </div>
               </div>
-              {selectedCase.status === 'Pendiente' && (
+              {selectedCase.status !== 'Terminado' && (
                 <div className="case-details-actions">
-                  <button className="modal-submit" onClick={handleMarkAsFinished}>
-                    Marcar como Terminado
+                  <button className="modal-submit" onClick={handleOpenChangeStatusModal}>
+                    Cambiar Estado
                   </button>
                 </div>
               )}
+              {selectedCase.status === 'Terminado' && (
+                <div className="case-details-actions">
+                  <p style={{ 
+                    color: '#666', 
+                    fontStyle: 'italic', 
+                    textAlign: 'center',
+                    padding: '10px',
+                    backgroundColor: '#f5f5f5',
+                    borderRadius: '6px'
+                  }}>
+                    Este caso está terminado y no puede cambiar de estado.
+                    <br />
+                    <strong>Responsable:</strong> {selectedCase.responsableNombre || 'Sin responsable asignado'}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para cambiar estado del caso */}
+      {showChangeStatusModal && selectedCase && (
+        <div className="modal-overlay" onClick={handleCloseChangeStatusModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Cambiar Estado del Caso</h2>
+              <button className="modal-close" onClick={handleCloseChangeStatusModal}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                  <path d="M19 6.41L17.59 5L12 10.59L6.41 5L5 6.41L10.59 12L5 17.59L6.41 19L12 13.41L17.59 19L19 17.59L13.41 12L19 6.41Z" fill="#666"/>
+                </svg>
+              </button>
+            </div>
+            <div className="modal-form">
+              <div className="form-group">
+                <label>Estado actual:</label>
+                <p style={{ fontWeight: 'bold', color: '#9333EA', fontSize: '16px' }}>
+                  {selectedCase.status}
+                </p>
+              </div>
+              <div className="form-group">
+                <label>Nuevo estado *</label>
+                <select
+                  value={statusChangeData.nuevoEstado}
+                  onChange={(e) => setStatusChangeData(prev => ({ ...prev, nuevoEstado: e.target.value }))}
+                  required
+                >
+                  <option value="">Seleccione un estado...</option>
+                  {selectedCase.status !== 'Pendiente' && (
+                    <option value="Pendiente">Pendiente</option>
+                  )}
+                  {selectedCase.status !== 'Abierto' && (
+                    <option value="Abierto">Abierto</option>
+                  )}
+                  {selectedCase.status !== 'Terminado' && (
+                    <option value="Terminado">Terminado</option>
+                  )}
+                </select>
+              </div>
+              {(statusChangeData.nuevoEstado === 'Pendiente' || statusChangeData.nuevoEstado === 'Terminado') && (
+                <div className="form-group">
+                  <label>Motivo del cambio *</label>
+                  <textarea
+                    value={statusChangeData.motivo}
+                    onChange={(e) => setStatusChangeData(prev => ({ ...prev, motivo: e.target.value }))}
+                    required
+                    rows="4"
+                    placeholder="Ingrese el motivo del cambio de estado..."
+                  />
+                </div>
+              )}
+              <div className="modal-actions">
+                <button type="button" className="modal-cancel" onClick={handleCloseChangeStatusModal}>
+                  Cancelar
+                </button>
+                <button type="button" className="modal-submit" onClick={handleChangeStatus}>
+                  Cambiar Estado
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -627,6 +1272,37 @@ export default function Cases() {
                     }}
                   />
                 </div>
+              </div>
+              <div className="form-group">
+                <label>Responsable del caso *</label>
+                <select
+                  name="responsable"
+                  value={formData.responsable}
+                  onChange={handleInputChange}
+                  required
+                  disabled={usuarios.length === 0}
+                >
+                  <option value="">
+                    {usuarios.length === 0 
+                      ? 'No hay usuarios disponibles (THA/Usuario)' 
+                      : 'Seleccione un responsable...'}
+                  </option>
+                  {usuarios.map((usuario) => {
+                    const userId = usuario.id || usuario.Id_Usuario;
+                    const nombreUsuario = usuario.nombre || usuario.username || 'Sin nombre';
+                    const rolTipo = usuario.rol_tipo || usuario.rol?.tipo || '';
+                    return (
+                      <option key={userId} value={userId}>
+                        {nombreUsuario} {rolTipo ? `(${rolTipo})` : ''}
+                      </option>
+                    );
+                  })}
+                </select>
+                {usuarios.length === 0 && (
+                  <p style={{ color: '#ff6b6b', fontSize: '12px', marginTop: '5px' }}>
+                    No se encontraron usuarios con rol THA o Usuario. Verifique la conexión con el servidor.
+                  </p>
+                )}
               </div>
               <div className="form-group">
                 <label>Información de que se solicita en el caso *</label>

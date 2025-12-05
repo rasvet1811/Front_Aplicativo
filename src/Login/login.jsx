@@ -30,6 +30,17 @@ export default function Login() {
       console.log('[Login] Respuesta del servidor:', response);
       
       if (response.token) {
+        // Verificar que el usuario esté activo
+        if (response.user && response.user.estado) {
+          const estado = response.user.estado.toLowerCase();
+          if (estado === 'inactivo') {
+            setError("Tu cuenta está inactiva. Por favor, contacta al administrador para reactivarla.");
+            // Limpiar cualquier token que se haya guardado
+            authService.logout().catch(() => {});
+            return;
+          }
+        }
+        
         setEmail("");
         setPassword("");
         navigate("/dashboard");

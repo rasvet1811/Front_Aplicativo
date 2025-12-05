@@ -4,7 +4,7 @@ import Nav from "../Nav/Nav.jsx";
 import LaboralMedicaForm from "./LaboralMedicaForm.jsx";
 import RecomendacionesForm from "./RecomendacionesForm.jsx";
 import AnexosForm from "./AnexosForm.jsx";
-import { empleadosAPI } from "../../../services/api.js";
+import { empleadosAPI, authService, documentosAPI, carpetasAPI, casosAPI } from "../../../services/api.js";
 
 export default function DocumentForm() {
   // Estados para información general
@@ -51,6 +51,8 @@ export default function DocumentForm() {
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [allEmployees, setAllEmployees] = useState([]);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+  const [savingDocument, setSavingDocument] = useState(false);
   const notificationDateRef = useRef(null);
   const incapacityStartRef = useRef(null);
   const incapacityEndRef = useRef(null);
@@ -92,12 +94,23 @@ export default function DocumentForm() {
     setEmployeeName(value);
     
     if (value.length >= 1) {
+      // Verificar autenticación antes de buscar
+      if (!authService.isAuthenticated()) {
+        console.error('[DocumentForm] No hay token de autenticación. Por favor, inicia sesión.');
+        setSearchResults([]);
+        setShowSearchResults(false);
+        alert('No estás autenticado. Por favor, inicia sesión para buscar empleados.');
+        return;
+      }
+
       setSearchLoading(true);
       try {
         console.log('[DocumentForm] Buscando empleados con:', value);
+        console.log('[DocumentForm] Token disponible:', authService.getToken() ? 'Sí' : 'No');
         // Buscar empleados en la base de datos
         // Si el valor está vacío o es muy corto, buscar todos
         const searchTerm = value.length >= 2 ? value : '';
+        console.log('[DocumentForm] Término de búsqueda:', searchTerm);
         let responseData = await empleadosAPI.getAll(searchTerm, null);
         console.log('[DocumentForm] Resultados de búsqueda (raw):', responseData);
         console.log('[DocumentForm] Tipo de datos:', typeof responseData, Array.isArray(responseData));
@@ -151,11 +164,15 @@ export default function DocumentForm() {
             const apellido = (emp.apellido || emp.Apellido || '').toLowerCase();
             const cargo = (emp.cargo || emp.Cargo || '').toLowerCase();
             const correo = (emp.correo || emp.Correo || '').toLowerCase();
+            const numeroDocumento = (emp.numero_documento || emp.Numero_Documento || '').toLowerCase();
+            const ciudad = (emp.ciudad || emp.Ciudad || '').toLowerCase();
             const searchLower = value.toLowerCase();
             return nombre.includes(searchLower) || 
                    apellido.includes(searchLower) || 
                    cargo.includes(searchLower) ||
                    correo.includes(searchLower) ||
+                   numeroDocumento.includes(searchLower) ||
+                   ciudad.includes(searchLower) ||
                    `${nombre} ${apellido}`.includes(searchLower);
           });
         }
@@ -175,9 +192,9 @@ export default function DocumentForm() {
             status: emp.estado || emp.Estado || '',
             entryDate: emp.fecha_ingreso || emp.Fecha_Ingreso || '',
             immediateLeader: emp.supervisor || emp.Supervisor || '',
-            workCity: '', // Este campo no está en la BD de empleados, se puede agregar después
-            documentNumber: '', // Este campo no está en la BD de empleados
-            documentIdType: '', // Este campo no está en la BD de empleados
+            workCity: emp.ciudad || emp.Ciudad || '', // Campo ciudad desde la BD
+            documentNumber: emp.numero_documento || emp.Numero_Documento || '', // Campo número de documento desde la BD
+            documentIdType: emp.tipo_documento || emp.Tipo_Documento || '', // Campo tipo de documento desde la BD
             correo: emp.correo || emp.Correo || '',
             telefono: emp.telefono || emp.Telefono || '',
             fecha_nacimiento: emp.fecha_nacimiento || emp.Fecha_Nacimiento || '',
@@ -195,6 +212,20 @@ export default function DocumentForm() {
         console.error('[DocumentForm] Error completo:', error.message, error.stack);
         setSearchResults([]);
         setShowSearchResults(false);
+        
+        // Mostrar mensaje de error al usuario
+        const errorMessage = error.message || 'Error al buscar empleados en la base de datos';
+        console.error('[DocumentForm] Mensaje de error para el usuario:', errorMessage);
+        
+        // Si es un error de autenticación, sugerir iniciar sesión
+        if (errorMessage.includes('401') || errorMessage.includes('autenticación') || errorMessage.includes('Token')) {
+          alert('Tu sesión ha expirado. Por favor, inicia sesión nuevamente.');
+        } else if (errorMessage.includes('Failed to fetch') || errorMessage.includes('conectar')) {
+          alert('No se pudo conectar con el servidor. Verifica que el backend esté corriendo.');
+        } else {
+          // No mostrar alert para otros errores, solo loguear
+          console.warn('[DocumentForm] Error en búsqueda:', errorMessage);
+        }
       } finally {
         setSearchLoading(false);
       }
@@ -215,6 +246,7 @@ export default function DocumentForm() {
     setWorkCity(employee.workCity);
     setDocumentNumber(employee.documentNumber);
     setDocumentIdType(employee.documentIdType);
+    setSelectedEmployeeId(employee.id); // Guardar el ID del empleado seleccionado
     setShowSearchResults(false);
   };
 
@@ -244,7 +276,12 @@ export default function DocumentForm() {
     }
   };
 
-  const generateDocument = () => {
+  const generateDocument = async () => {
+    if (!selectedEmployeeId) {
+      alert("Por favor, selecciona un empleado primero.");
+      return;
+    }
+
     let documentContent = "";
 
     if (documentType === "Despidos") {
@@ -259,18 +296,116 @@ export default function DocumentForm() {
     const blob = new Blob([documentContent], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
+    const fileName = `${documentType}_${employeeName}_${lastName}.txt`;
     a.href = url;
-    a.download = `${documentType}_${employeeName}_${lastName}.txt`;
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+
+    // Guardar el documento en la BD
+    try {
+      setSavingDocument(true);
+      
+      // Buscar o crear una carpeta para el empleado (carpeta por defecto)
+      let carpetaId = null;
+      try {
+        const carpetas = await carpetasAPI.getAll(selectedEmployeeId);
+        const carpetasArray = Array.isArray(carpetas) ? carpetas : (carpetas.results || []);
+        
+        // Buscar una carpeta con nombre relacionado al tipo de documento o crear una por defecto
+        const carpetaDefault = carpetasArray.find(c => 
+          c.nombre?.toLowerCase().includes('documentos') || 
+          c.nombre?.toLowerCase().includes('generados')
+        );
+        
+        if (carpetaDefault) {
+          carpetaId = carpetaDefault.id || carpetaDefault.Id_Carpeta;
+        } else if (carpetasArray.length > 0) {
+          // Usar la primera carpeta disponible
+          carpetaId = carpetasArray[0].id || carpetasArray[0].Id_Carpeta;
+        } else {
+          // Crear una carpeta por defecto
+          const nuevaCarpeta = await carpetasAPI.create({
+            empleado: selectedEmployeeId,
+            nombre: 'Documentos Generados'
+          });
+          carpetaId = nuevaCarpeta.id || nuevaCarpeta.Id_Carpeta;
+        }
+      } catch (error) {
+        console.error('Error al obtener/crear carpeta:', error);
+        // Continuar sin carpeta si hay error
+      }
+
+      // Buscar un caso asociado al empleado (opcional)
+      let casoId = null;
+      try {
+        const casos = await casosAPI.getAll(null, selectedEmployeeId);
+        if (casos && casos.length > 0) {
+          casoId = casos[0].id || casos[0].Id_Caso;
+        }
+      } catch (error) {
+        console.warn('No se pudo obtener el caso, continuando sin caso:', error);
+        // Continuar sin caso - el backend debería permitir documentos sin caso
+      }
+
+      // Obtener el usuario actual
+      const user = authService.getUser();
+      const userId = user?.id || user?.Id_Usuario;
+
+      // Convertir el blob a File para subirlo
+      const file = new File([blob], fileName, { type: "text/plain" });
+
+      // Crear el documento en la BD
+      const documentoData = {
+        nombre: fileName,
+        tipo: documentType,
+        descripcion: `Documento generado desde formulario - ${documentType}`,
+        extension: 'txt',
+        empleado: parseInt(selectedEmployeeId)
+      };
+
+      // Solo agregar caso si existe (opcional)
+      if (casoId) {
+        documentoData.caso = parseInt(casoId);
+      }
+
+      // Solo agregar carpeta si existe
+      if (carpetaId) {
+        documentoData.carpeta = parseInt(carpetaId);
+      }
+
+      // Solo agregar usuario_creador si existe
+      if (userId) {
+        documentoData.usuario_creador = parseInt(userId);
+      }
+
+      console.log('[DocumentForm] Datos del documento a crear:', documentoData);
+      console.log('[DocumentForm] Archivo:', file);
+
+      await documentosAPI.create(documentoData, file);
+      alert("Documento generado y guardado exitosamente");
+      
+      // Disparar evento para actualizar el Dashboard
+      console.log('[DocumentForm] Disparando evento document-created');
+      window.dispatchEvent(new CustomEvent('document-created', { 
+        detail: { 
+          timestamp: new Date().toISOString(),
+          empleadoId: selectedEmployeeId 
+        } 
+      }));
+    } catch (error) {
+      console.error('Error al guardar documento en BD:', error);
+      alert("Documento generado, pero hubo un error al guardarlo en la base de datos. El archivo se descargó correctamente.");
+    } finally {
+      setSavingDocument(false);
+    }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    generateDocument();
-    alert("Documento generado exitosamente");
+    await generateDocument();
   };
 
   const renderSpecificForm = () => {
@@ -918,12 +1053,19 @@ export default function DocumentForm() {
                 </div>
                 <div className="form-group">
                   <label>Tipo de documento</label>
-                  <input
-                    type="text"
+                  <select
                     value={documentIdType}
                     onChange={(e) => setDocumentIdType(e.target.value)}
-                    readOnly
-                  />
+                    disabled
+                  >
+                    <option value="">Seleccione...</option>
+                    <option value="CC">Cédula de Ciudadanía (CC)</option>
+                    <option value="RC">Registro Civil (RC)</option>
+                    <option value="TI">Tarjeta de Identidad (TI)</option>
+                    <option value="CE">Cédula de Extranjería (CE)</option>
+                    <option value="PA">Pasaporte (PA)</option>
+                    <option value="NIT">NIT</option>
+                  </select>
                 </div>
               </div>
 
